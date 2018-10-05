@@ -1,71 +1,91 @@
 #!/bin/sh
 
-################################################################################
-## Reads study list made by dicom-studies.sh and calls dicom-retrieve.sh for
-## each study
-################################################################################
+local_dir=$( dirname "${0}" )
 
-. $( dirname "${0}" )/base.environments
+. "${local_dir}/common.sh"
 
-studylist=`sh ${LOCAL_CMD}/dicom-studies.sh`
-case "$?" in
-  1)
-  echo "Already exists:$studylist"
-  ;;
-  2)
-  echo "Fatal Error : Stoped Process :${LOCAL_CMD}/dicom-studies.sh" >&2
-  exit 1
-  ;;
-esac
-
-l=`cat $studylist | wc -l`
-for i in `seq 1 $l`
-  do
-  studyline=`head -"$i" "$studylist" | tail -1`
-  studyiuid=`echo "$studyline" | cut -f1`
-  filecount=`echo "$studyline" | cut -f2`
-  archname=`echo "$studyline" | cut -f3`
-  if [ "$studyiuid" = "" ] || [ "$filecount" = "" ] || [ "$archname" = "" ]; then
-      echo "[Error] Wrong study information" >&2
-      continue
-  fi
-  day=`date +%Y-%m-%dT%H:%M`
-  num_of_file=`sh ${LOCAL_CMD}/dicom-retrieve.sh "${archname}" "${archname}.zip" $studyiuid`
-  retv="$?"
-  a=`echo "$num_of_file" | grep Retrievefiles:`
-  b=`echo "$a" | sed -e s/Retrievefiles\://`
-  case "$retv" in
-    0)
-    status="COMLETE"
-#     sh ${LOCAL_CMD}/dicom-header-chk.sh ${WORK_DIR}/$archname.zip
-#     if [ $?  = 0 ] ; then
-#        header="OK"
-#     else
-#        header="NG"
-#     fi
-    header="NONE"
-    ;;
-    10)
-    echo "Already exists: $studyline"
-    continue
-    ;;
-    2)
-    echo "Fatal Error : Stoped Process :${LOCAL_CMD}/dicom-retrieve.sh" >&2
-    status="FATALERROR"
+study_list_file=$(ls -1 "${WORK_DIR}"/study-list.????-??-??T??????*.tsv | tail -1)
+if test -e "${study_list_file}" -a -f "${study_list_file}" -a -r "${study_list_file}"
+then
+    :
+else
+    echo "[Error] File ${study_list_file} has to exist, and to be read." >&2
     exit 1
-    ;;
-    3)
-    echo "Error : while zip : $studyline" >&2
-    status="ZIPERROR"
-    ;;
-    100)
-    echo "Retrieve unkown Error: Make sure log files or try again : $studyline" >&2
-    status="UNKNOWN"
-    ;;
-  esac
-  echo "$day	$b	$status	$header	*	$studyline" >> ${LOGS_DIR}/retrieve.log
-  if [ "x${status}" = "xFATALERROR" ] ; then
-     exit 1
-  fi
-done
-echo `date +%Y-%m-%dT%H%M%S%z`' [Finished]'
+fi
+
+log_dir="${LOGS_DIR}/archive-studies."$( timestamp )'.'$( basename "${study_list_file}" .tsv | sed --posix 's|^study-list\.||' )
+
+sum_log_file="${log_dir}.summary.log"
+if test -e "${sum_log_file}"
+then
+    echo "[Error] Already exists: ${sum_log_file}" >&2
+    exit 1
+fi
+
+error() {
+    echo "[Error] $1" >&2
+    echo "$1" >> "${sum_log_file}" || exit 1
+    if [ $? -ne 0 ]
+    then
+    	echo "[Error] Failed in echo ... >> ${sum_log_file}" >&2
+    	exit 1
+    fi
+}
+
+if test -e "${log_dir}"
+then
+    error "Already exists: ${log_dir}"
+    exit 1
+fi
+
+mkdir "${log_dir}"
+if [ $? -ne 0 ]
+then
+    error "Failed in mkdir ${log_dir}"
+    exit 1
+fi
+
+while read study
+do
+    uid=$( echo "${study}" | cut -f1 )
+    count=$( echo "${study}" | cut -f2 )
+    name=$( echo "${study}" | cut -f3 )
+
+    echo -n $( timestamp )" ${study} " >> "${sum_log_file}"
+
+    err_file="${log_dir}/${uid}.err"
+    if test -e "${err_file}"
+    then
+	error "Already exists: ${err_file}"
+	exit 1
+    fi
+
+    result=$( "${local_dir}/archive-a-study.sh" "${uid}" "${name}" "${log_dir}" 2> "${err_file}" )
+
+    if [ $? -ne 0 ]
+    then
+	error "Failed in ${local_dir}/archive-a-study.sh ${uid} ${name} ${log_dir} 2> ${err_file}"
+	error "See ${err_file}"
+	exit 1
+    fi
+
+    if test -s "${err_file}"
+    then
+	:
+    else
+	:
+	# rm "${err_file}"
+    fi
+
+    if expr "${result}" != "${count}" > /dev/null
+    then
+	error "Instance count mismatch: ${result} retrieved whilst ${count} queried"
+	exit 1
+    fi
+
+    echo $( timestamp )' [Succeeded]' >> "${sum_log_file}" || exit $?
+done < "${study_list_file}" || exit $?
+
+echo $( timestamp )' [Succeeded all]' >> "${sum_log_file}" || exit $?
+
+exit 0

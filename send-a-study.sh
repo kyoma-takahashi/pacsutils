@@ -1,48 +1,82 @@
 #!/bin/sh
-if [ $# != 1 ]; then
-   echo "Usage: send_to_dicom.sh dicom-archive-zipfile"
-   exit 1
+
+. $( dirname "${0}" )/common.sh
+
+src_zip="$1"
+log_dir="$2"
+
+if test -r "${src_zip}"
+then
+    :
+else
+    echo "[Error] File ${src_zip}, given as the first argument, has to be read." >&2
+    exit 1
 fi
 
-echo "$0 has not been not tested yet after changing to check the standard error of dcmsnd." >&2 ###
+if test -e "${log_dir}" -a -d "${log_dir}" -a -w "${log_dir}"
+then
+    :
+else
+    echo "[Error] Directory ${log_dir} has to exist, and to be written." >&2
+    exit 1
+fi
 
-. $( dirname "${0}" )/base.environments
+zip --quiet --test "${src_zip}" || {
+    echo "Failed in zip --test ${src_zip}" >&2
+    exit 1
+}
 
-a=`/usr/bin/zipinfo -h $1`
-infile=`echo "$a" | cut -d" " -f9`
-if [ "$?" != "0" ]; then
-      echo "zipinfo unsuccessful:$1" >&2
-      exit 3
+src_zip_bn=$( basename "${src_zip}" | sed 's|\.zip||i' )
+
+unzipped_dir="${WORK_DIR}/to-send.${src_zip_bn}".$( timestamp )
+
+if test -e "${unzipped_dir}"
+then
+    echo "[Error] Already exists: ${unzipped_dir}" >&2
+    exit 1
 fi
-workdir="${WORK_DIR}/workdir.$$"
-if [ $? != 0 ] ; then
-   echo "Can not create work directory: $workdir"
-   exit 1
+
+unzip -qq "${src_zip}" -d "${unzipped_dir}"
+
+if [ $? -ne 0 ]
+then
+    echo "[Error] Failed in unzip -qq ${src_zip} -d ${unzipped_dir}" >&2
+    exit 1
 fi
-/usr/bin/unzip $1 -d $workdir > /dev/null 2>&1
-if [ "$?" != "0" ]; then
-      echo "zipinfo unsuccessful:$1" >&2
-      exit 3
+
+if test -e "${unzipped_dir}"
+then
+    :
+else
+    echo "[Error] Not exists: ${unzipped_dir}" >&2
+    exit 1
 fi
-day=`date +%Y-%m-%dT%H%M`
-echo -n "Send Start $day"
-echo -n "	$1"
-status="COMPLETE"
-dcmsnderr="${WORK_DIR}/dcmsnd.$$.err"
-${CMD_BASE}/dcmsnd -L ${CALLING_AET} ${CALLED_AET} $workdir > /dev/null 2> "${dcmsnderr}"
-RT="$?"
-echo "	Finish"
-rm -rf $workdir
-if [ "$RT" != "0" ] || [ -s "${dcmsnderr}" ]; then
-   status="FAILED"
-   echo "	sent unsuccessful" >&2
-   echo "$day	$infile	$1	$status"  >> ${LOGS_DIR}/send-dicom.log
-   if [ -s "${dcmsnderr}" ]; then
-       cat "${dcmsnderr}" >&2
-   fi
-   rm "${dcmsnderr}"
-   exit 100
+
+storescu_out="${log_dir}/${src_zip_bn}."$( timestamp )'.storescu.out'
+
+if test -e "${storescu_out}"
+then
+    echo "[Error] Already exists: ${storescu_out}" >&2
+    exit 1
 fi
-echo "$day	$infile	$1	$status"  >> ${LOGS_DIR}/send-dicom.log
-rm "${dcmsnderr}"
+
+"${DCM4CHE5}/bin/storescu" \
+    --bind "${CALLING_AET}" --connect "${CALLED_AET}" \
+    "${unzipped_dir}" \
+    > "${storescu_out}"
+
+if [ $? -ne 0 ]
+then
+    echo "[Error] Failed in ${DCM4CHE5}/bin/storescu ... ${unzipped_dir}" >&2
+    exit 1
+fi
+
+rm -r "${unzipped_dir}"
+
+if [ $? -ne 0 ]
+then
+    echo "[Error] Failed in rm -r ${unzipped_dir}" >&2
+    exit 1
+fi
+
 exit 0

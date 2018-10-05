@@ -29,6 +29,14 @@ PACS Utilities
   * (study instance UID).storescp.out
   * (study instance UID).movescu.out
 
+#### Send DICOMs to the remote storage, from ZIP files
+
+* Execute `./send-studies.sh zip_file ...`
+* Check send-studies.(timestamp).summary.log in LOGS_DIR
+* If needed, check the followings in send-studies.(timestamp) in LOGS_DIR
+  * (zip file basename).(timestamp).err
+  * (zip file basename).(timestamp).storescu.out
+
 ### Troubleshooting
 
 #### DCM4Che
